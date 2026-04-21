@@ -599,6 +599,53 @@ curl -X POST https://YOUR_SITE.netlify.app/.netlify/functions/saleshandy-api \
   -d '{"action": "sequences"}'
 ```
 
+### Lint live sequence content (catches unrendered spintax)
+
+Scans every active sequence in SalesHandy via the open API and reports step variants whose subject or body would ship broken. **Run before activating a new sequence, and on a schedule for active ones.**
+
+```bash
+curl -X POST https://YOUR_SITE.netlify.app/.netlify/functions/saleshandy-api \
+  -H "Authorization: Bearer YOUR_ADMIN_PASSWORD" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "lint-sequences"}'
+```
+
+Options:
+- `"onlyActive": false` — also scan paused sequences (default: true).
+- `"sequenceIds": ["<id1>", "<id2>"]` — scope to specific sequences.
+
+Issue kinds returned:
+- `spintax` — literal `{a|b}` in subject or body. The prospect sees the raw braces (this is what sent to brandon@theteamarchitects.com on 2026-04-21). Either re-enter the variation via SalesHandy's spintax button or flatten to a single phrasing.
+- `placeholder` — unreplaced `[SIGNATURE_URL]`, `[CTA_URL]`, etc. — pasted from this doc but never filled in.
+- `empty-subject` — email variant with no subject.
+- `fetch-error` — couldn't read the sequence's steps (API/auth issue).
+
+Response shape:
+
+```json
+{
+  "action": "lint-sequences",
+  "ok": false,
+  "sequencesScanned": 7,
+  "stepsScanned": 24,
+  "variantsScanned": 31,
+  "issueCount": 3,
+  "findings": [
+    {
+      "sequenceId": "...",
+      "sequenceName": "Implementer Charter Outreach",
+      "stepId": "...",
+      "stepOrder": 1,
+      "variantId": "...",
+      "channel": "email",
+      "kind": "spintax",
+      "field": "subject",
+      "snippet": "{a question about how you coach|one question about how you coach}"
+    }
+  ]
+}
+```
+
 ---
 
 ## 11. Flow: SalesHandy → Zoho (with Branching)

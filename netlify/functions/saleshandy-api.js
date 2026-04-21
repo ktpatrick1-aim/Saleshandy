@@ -251,6 +251,75 @@ const FIELD_IDS = {
   personalizedSequence: process.env.SH_FIELD_PERSONALIZED_SEQUENCE || "",
 };
 
+// ── Sequence content linter ──────────────────────────────────
+// Flags authoring mistakes in Saleshandy sequence step variants that would
+// otherwise ship to prospects as-is. Intentionally conservative — only flags
+// patterns that are almost certainly wrong, not stylistic preferences.
+//
+// Patterns detected:
+//   - spintax:     literal {a|b|c} that wasn't registered via Saleshandy's
+//                  spintax feature. Would send the raw braces to the prospect.
+//                  Uses lookarounds to ignore double-brace merge tags.
+//   - placeholder: unreplaced [SIGNATURE_URL] or [CTA_URL]-style markers from
+//                  the SETUP doc that were pasted but never filled in.
+//   - empty:       email step variant with no subject at all.
+
+const SPINTAX_RE = /(?<!\{)\{[^{}\n]{1,400}\|[^{}\n]{0,400}\}(?!\})/g;
+const PLACEHOLDER_RE = /\[(SIGNATURE_URL|CTA_URL|UNSUBSCRIBE_URL|CALENDAR_URL|REPLACE[A-Z_]*)\]/g;
+
+function stripHtmlToText(html) {
+  if (!html || typeof html !== "string") return "";
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findMatches(text, regex) {
+  if (!text) return [];
+  const out = [];
+  const re = new RegExp(regex.source, regex.flags);
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    out.push(m[0]);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+function lintVariant(variant, channel) {
+  const issues = [];
+  const subject = variant.subject || "";
+  const rawBody = variant.content || variant.body || variant.htmlBody || "";
+  const bodyText = stripHtmlToText(rawBody);
+
+  if (channel === "email" && !subject.trim()) {
+    issues.push({ kind: "empty-subject", field: "subject", snippet: "" });
+  }
+
+  for (const hit of findMatches(subject, SPINTAX_RE)) {
+    issues.push({ kind: "spintax", field: "subject", snippet: hit });
+  }
+  for (const hit of findMatches(bodyText, SPINTAX_RE)) {
+    issues.push({ kind: "spintax", field: "body", snippet: hit });
+  }
+
+  for (const hit of findMatches(subject, PLACEHOLDER_RE)) {
+    issues.push({ kind: "placeholder", field: "subject", snippet: hit });
+  }
+  for (const hit of findMatches(bodyText, PLACEHOLDER_RE)) {
+    issues.push({ kind: "placeholder", field: "body", snippet: hit });
+  }
+
+  return issues;
+}
+
 // ── SalesHandy API helper ────────────────────────────────────
 
 function saleshandyRequest(method, path, body) {
@@ -918,6 +987,107 @@ exports.handler = async (event) => {
         };
       }
 
+      // ── Lint sequence content (catches unrendered spintax etc) ─
+      case "lint-sequences": {
+        const listRes = await saleshandyRequest("GET", "/sequences?pageSize=1000");
+        if (listRes.status !== 200) {
+          return {
+            statusCode: 502,
+            headers: CORS,
+            body: JSON.stringify({
+              action: "lint-sequences",
+              error: "Failed to list sequences from SalesHandy",
+              status: listRes.status,
+              details: listRes.data,
+            }),
+          };
+        }
+
+        const sequences = Array.isArray(listRes.data?.data)
+          ? listRes.data.data
+          : Array.isArray(listRes.data?.sequences)
+          ? listRes.data.sequences
+          : Array.isArray(listRes.data)
+          ? listRes.data
+          : [];
+
+        const onlyActive = body.onlyActive !== false;
+        const filterIds = Array.isArray(body.sequenceIds) && body.sequenceIds.length > 0
+          ? new Set(body.sequenceIds.map(String))
+          : null;
+
+        const findings = [];
+        let stepsScanned = 0;
+        let variantsScanned = 0;
+
+        for (const seq of sequences) {
+          const sequenceId = String(seq.id || seq._id || "");
+          if (!sequenceId) continue;
+          if (filterIds && !filterIds.has(sequenceId)) continue;
+          if (onlyActive && seq.active === false) continue;
+
+          const stepsRes = await saleshandyRequest("GET", `/sequences/${sequenceId}/steps`);
+          if (stepsRes.status !== 200) {
+            findings.push({
+              sequenceId,
+              sequenceName: seq.title || seq.name || "",
+              stepId: null,
+              variantId: null,
+              kind: "fetch-error",
+              field: null,
+              snippet: `Steps fetch failed (status ${stepsRes.status})`,
+            });
+            continue;
+          }
+
+          const steps = Array.isArray(stepsRes.data?.data)
+            ? stepsRes.data.data
+            : Array.isArray(stepsRes.data?.steps)
+            ? stepsRes.data.steps
+            : Array.isArray(stepsRes.data)
+            ? stepsRes.data
+            : [];
+
+          for (const step of steps) {
+            stepsScanned++;
+            const stepId = String(step.id || step._id || "");
+            const channel = (step.channel || step.type || "email").toLowerCase();
+            const variants = Array.isArray(step.variants) ? step.variants : [step];
+
+            for (const variant of variants) {
+              variantsScanned++;
+              const issues = lintVariant(variant, channel);
+              for (const issue of issues) {
+                findings.push({
+                  sequenceId,
+                  sequenceName: seq.title || seq.name || "",
+                  stepId,
+                  stepOrder: step.order || step.stepOrder || step.position || null,
+                  variantId: String(variant.id || variant._id || ""),
+                  variantName: variant.name || null,
+                  channel,
+                  ...issue,
+                });
+              }
+            }
+          }
+        }
+
+        return {
+          statusCode: 200,
+          headers: CORS,
+          body: JSON.stringify({
+            action: "lint-sequences",
+            ok: findings.filter((f) => f.kind !== "fetch-error").length === 0,
+            sequencesScanned: sequences.length,
+            stepsScanned,
+            variantsScanned,
+            issueCount: findings.length,
+            findings,
+          }),
+        };
+      }
+
       // ── Sender pool status ────────────────────────────────
       case "sender-status": {
         const report = await getSenderHealthReport(supabase);
@@ -952,7 +1122,7 @@ exports.handler = async (event) => {
           headers: CORS,
           body: JSON.stringify({
             error: "Unknown action",
-            validActions: ["build", "import", "tag", "untag", "sequences", "validate-config", "sender-status", "sender-manage"],
+            validActions: ["build", "import", "tag", "untag", "sequences", "validate-config", "sender-status", "sender-manage", "lint-sequences"],
           }),
         };
     }
