@@ -167,8 +167,10 @@ async function fetchCalendlyBookedEmails() {
 // ── Zoho lead listing (last N days) ─────────────────────────
 
 async function fetchRecentZohoLeads(accessToken, days) {
-  const sinceIso = new Date(Date.now() - days * 86400e3).toISOString();
-  // Zoho criteria format: (Created_Time:greater_equal:2026-04-10T00:00:00+00:00)
+  // Zoho rejects the trailing "Z" + millisecond ISO format; it wants
+  // explicit +00:00 offset and no fractional seconds.
+  // e.g. 2026-04-10T00:00:00+00:00
+  const sinceIso = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 19) + "+00:00";
   const criteria = `(Created_Time:greater_equal:${sinceIso})`;
 
   const leads = [];
