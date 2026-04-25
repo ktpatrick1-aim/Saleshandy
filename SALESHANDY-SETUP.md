@@ -15,14 +15,14 @@ This reverses the prior approach where Saleshandy's native Zoho integration auto
 3. **Backfill cleanup** of noise Leads already in Zoho:
    ```
    # Dry run — review the hit list
-   curl 'https://<site>.netlify.app/.netlify/functions/cleanup-zoho-noncalendly?days=14'
+   curl 'https://saleshandy-outbound.netlify.app/.netlify/functions/cleanup-zoho-noncalendly?days=14'
 
    # Archive (tags `noise-no-calendly-booking`, sets Lead_Status="Junk Lead")
-   curl -X POST 'https://<site>.netlify.app/.netlify/functions/cleanup-zoho-noncalendly?days=14&dryRun=false&confirm=yes'
+   curl -X POST 'https://saleshandy-outbound.netlify.app/.netlify/functions/cleanup-zoho-noncalendly?days=14&dryRun=false&confirm=yes'
    ```
 4. **Register the Calendly→Zoho webhook subscription:**
    ```
-   curl 'https://<site>.netlify.app/.netlify/functions/calendly-register-webhook?confirm=yes'
+   curl 'https://saleshandy-outbound.netlify.app/.netlify/functions/calendly-register-webhook?confirm=yes'
    ```
    Copy the returned `signing_key` into Netlify env as `CALENDLY_WEBHOOK_SIGNING_KEY` and trigger a redeploy.
 5. **Test:** book a Calendly slot with a fresh email, confirm a Zoho Lead appears with `Lead_Source=Calendly`, tag `calendly-booked`, `Lead_Status=Qualified`. Check `crm_sync_log` in Supabase for the audit row.
