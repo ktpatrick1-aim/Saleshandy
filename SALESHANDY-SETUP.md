@@ -1,22 +1,60 @@
 # SalesHandy Setup Guide — Dream Compass
 
-## Overview
+## ⚠️ Zoho Routing Policy (2026-04-24)
 
-SalesHandy handles outbound email sequences for lead nurturing. This integrates with:
-- **Zoho CRM (native)** — SalesHandy's built-in Zoho integration handles lead/contact creation, activity logging, bounce/unsub tagging, and duplicate checking
+**Only Calendly-booked prospects belong in Zoho.** All other Saleshandy activity (opens, clicks, replies without a booking, bounces, unsubscribes) is treated as noise and must NOT flow into Zoho.
+
+This reverses the prior approach where Saleshandy's native Zoho integration auto-created Leads on every prospect added to a sequence.
+
+### Cutover steps (one-time)
+
+1. **Disconnect Saleshandy native Zoho** — Saleshandy UI → Settings → Integrations → Zoho → Disconnect. Without this step Saleshandy will keep dumping noise Leads into Zoho.
+2. **Add new env vars in Netlify:**
+   - `CALENDLY_API_TOKEN` — Calendly personal access token (calendly.com/integrations/api_webhooks → Personal Access Tokens)
+   - `CALENDLY_WEBHOOK_SIGNING_KEY` — leave unset for now; populated by step 4
+3. **Backfill cleanup** of noise Leads already in Zoho:
+   ```
+   # Dry run — review the hit list
+   curl 'https://<site>.netlify.app/.netlify/functions/cleanup-zoho-noncalendly?days=14'
+
+   # Archive (tags `noise-no-calendly-booking`, sets Lead_Status="Junk Lead")
+   curl -X POST 'https://<site>.netlify.app/.netlify/functions/cleanup-zoho-noncalendly?days=14&dryRun=false&confirm=yes'
+   ```
+4. **Register the Calendly→Zoho webhook subscription:**
+   ```
+   curl 'https://<site>.netlify.app/.netlify/functions/calendly-register-webhook?confirm=yes'
+   ```
+   Copy the returned `signing_key` into Netlify env as `CALENDLY_WEBHOOK_SIGNING_KEY` and trigger a redeploy.
+5. **Test:** book a Calendly slot with a fresh email, confirm a Zoho Lead appears with `Lead_Source=Calendly`, tag `calendly-booked`, `Lead_Status=Qualified`. Check `crm_sync_log` in Supabase for the audit row.
+
+### Go-forward architecture
+
+```
+Saleshandy sequences  →  Supabase engagement log only (no Zoho writes)
+Calendly invitee.created/canceled  →  calendly-webhook-zoho.js  →  Zoho Lead (upsert)
+```
+
+The custom Saleshandy webhook (`saleshandy-webhook.js`) still runs but its Zoho write paths are now no-ops in spirit — Lead creation comes from Calendly only. Engagement scoring/sequence branching remain in Supabase.
+
+---
+
+## Overview (legacy — pre-Calendly cutover)
+
+SalesHandy handles outbound email sequences for lead nurturing. Pre-cutover this integrated with:
+- **Zoho CRM (native)** — SalesHandy's built-in Zoho integration handles lead/contact creation, activity logging, bounce/unsub tagging, and duplicate checking — **DISABLED per policy above**
 - **Zoho CRM (custom webhook)** — our `saleshandy-webhook.js` supplements native by adding engagement scoring, lifecycle stage promotion (MQL/SQL), outcome mapping, and **automatic sequence branching**
 - **Supabase** — engagement analytics logged to `sh_engagement_log`
 - **SalesHandy API** — import prospects into sequences and manage tags programmatically
 
-### Native vs Custom Integration
+### Native vs Custom Integration (legacy — native is now disconnected)
 
-| Capability | Native SalesHandy-Zoho | Custom Webhook |
+| Capability | Native SalesHandy-Zoho (DISABLED) | Custom Webhook |
 |------------|----------------------|----------------|
-| Create Leads/Contacts in Zoho | Yes | No (defers to native) |
-| Log email activity as Zoho notes | Yes | No |
-| Tag bounced/unsubscribed contacts | Yes | No |
-| Duplicate checking | Yes | No |
-| Custom field mapping | Yes (basic) | No |
+| Create Leads/Contacts in Zoho | ~~Yes~~ → now Calendly only | No (defers to Calendly webhook) |
+| Log email activity as Zoho notes | ~~Yes~~ → noise; not replaced | No |
+| Tag bounced/unsubscribed contacts | ~~Yes~~ → noise; not replaced | No |
+| Duplicate checking | ~~Yes~~ → handled by `Leads/upsert` in Calendly webhook | No |
+| Custom field mapping | ~~Yes (basic)~~ | No |
 | Engagement scoring (0-100) | No | **Yes** |
 | Lifecycle stage promotion (MQL/SQL) | No | **Yes** |
 | Outcome → stage mapping | No | **Yes** |
@@ -24,8 +62,6 @@ SalesHandy handles outbound email sequences for lead nurturing. This integrates 
 | Supabase analytics logging | No | **Yes** |
 | Reply snippet storage | No | **Yes** |
 | CRM sync audit trail | No | **Yes** |
-
-**Important:** Enable the native SalesHandy-Zoho integration FIRST (Settings > Integrations > Zoho). Our custom webhook runs alongside it without conflict — it only writes to custom `SH_*` fields and lifecycle stage fields.
 
 ---
 
