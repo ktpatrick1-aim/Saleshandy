@@ -28,19 +28,14 @@ const { createClient } = require("@supabase/supabase-js");
 
 const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID;
 const ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET;
+const ZOHO_REFRESH_TOKEN = process.env.ZOHO_REFRESH_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-function exchangeCode(code) {
-  const postData = new URLSearchParams({
-    grant_type: "authorization_code",
-    client_id: ZOHO_CLIENT_ID,
-    client_secret: ZOHO_CLIENT_SECRET,
-    code,
-  }).toString();
-
+function postToZoho(params) {
+  const postData = new URLSearchParams(params).toString();
   return new Promise((resolve, reject) => {
     const req = https.request({
       hostname: "accounts.zoho.com",
@@ -64,18 +59,52 @@ function exchangeCode(code) {
   });
 }
 
+function exchangeCode(code) {
+  return postToZoho({
+    grant_type: "authorization_code",
+    client_id: ZOHO_CLIENT_ID,
+    client_secret: ZOHO_CLIENT_SECRET,
+    code,
+  });
+}
+
+function refreshFromEnv() {
+  return postToZoho({
+    grant_type: "refresh_token",
+    client_id: ZOHO_CLIENT_ID,
+    client_secret: ZOHO_CLIENT_SECRET,
+    refresh_token: ZOHO_REFRESH_TOKEN,
+  });
+}
+
 exports.handler = async (event) => {
   const qs = event.queryStringParameters || {};
   if (qs.confirm !== "yes") {
     return json(400, { error: "this rewrites zoho_tokens — pass ?confirm=yes" });
   }
+
+  const fromEnv = qs.from_env === "yes";
   const code = qs.code;
-  if (!code) return json(400, { error: "?code=<self-client code from api-console.zoho.com> required" });
+
+  if (!fromEnv && !code) {
+    return json(400, { error: "pass ?code=<self-client code> OR ?from_env=yes (uses ZOHO_REFRESH_TOKEN env var)" });
+  }
 
   try {
-    const resp = await exchangeCode(code);
-    if (resp.status !== 200 || !resp.data.refresh_token) {
-      return json(500, { error: "Zoho code exchange failed", body: resp.data });
+    let resp;
+    let refreshToken;
+    if (fromEnv) {
+      if (!ZOHO_REFRESH_TOKEN) return json(500, { error: "ZOHO_REFRESH_TOKEN env var not set" });
+      resp = await refreshFromEnv();
+      // refresh_token grant doesn't return a new refresh_token — reuse env
+      refreshToken = ZOHO_REFRESH_TOKEN;
+    } else {
+      resp = await exchangeCode(code);
+      refreshToken = resp.data.refresh_token;
+    }
+
+    if (resp.status !== 200 || !resp.data.access_token || !refreshToken) {
+      return json(500, { error: "Zoho exchange failed", body: resp.data });
     }
 
     const expiresAt = new Date(Date.now() + (resp.data.expires_in || 3600) * 1000).toISOString();
@@ -83,7 +112,7 @@ exports.handler = async (event) => {
     const { error } = await supabase.from("zoho_tokens").upsert({
       id: "default",
       access_token: resp.data.access_token,
-      refresh_token: resp.data.refresh_token,
+      refresh_token: refreshToken,
       expires_at: expiresAt,
       updated_at: new Date().toISOString(),
     });
@@ -91,7 +120,7 @@ exports.handler = async (event) => {
 
     return json(200, {
       ok: true,
-      message: "zoho_tokens refreshed",
+      message: fromEnv ? "zoho_tokens synced from env var" : "zoho_tokens refreshed from new code",
       expires_at: expiresAt,
       api_domain: resp.data.api_domain,
     });
