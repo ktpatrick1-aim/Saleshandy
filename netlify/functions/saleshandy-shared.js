@@ -162,6 +162,7 @@ function calculateEngagementScore(eventType, existingScore) {
 
 function detectCampaign(sequenceName) {
   const name = (sequenceName || "").toLowerCase();
+  if (/erp.?var|var.?erp|trinity.?one.*erp/.test(name)) return "erp-var";
   if (/dream|dmp|dreamcompass/.test(name)) return "dream-manager";
   if (/forge|launch|entrepreneur/.test(name)) return "trinity-forge";
   if (/calibrate|optimize|ai/.test(name)) return "trinity-calibrate";
@@ -174,6 +175,13 @@ function detectCampaign(sequenceName) {
 function mapRoutedPropertyToCampaign(property) {
   if (!property || typeof property !== "string") return null;
   const normalized = property.trim().toLowerCase();
+  if (
+    /\berp[- ]?var\b/.test(normalized) ||
+    normalized === "trinity one" ||
+    normalized.includes("trinity one suite")
+  ) {
+    return "erp-var";
+  }
   if (normalized.includes("dream") || normalized.includes("retention") || normalized.includes("culture")) {
     return "dream-manager";
   }

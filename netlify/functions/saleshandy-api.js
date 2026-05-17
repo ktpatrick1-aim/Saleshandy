@@ -162,6 +162,8 @@ function assignSequence(campaign, leadScore, isInbound) {
       return "lead-nurture-cold";
     case "unicorn":
       return "lead-nurture-cold";
+    case "erp-var":
+      return "erp-var-cold";
     default:
       return "lead-nurture-cold";
   }
@@ -226,6 +228,26 @@ const SEQUENCES = {
       4: process.env.SH_SEQ_INBOUND_STEP4 || "",
     },
   },
+  "erp-var-cold": {
+    name: "Trinity One — ERP VAR Cold",
+    senderGroup: "cold-pool",
+    stepIds: {
+      1: process.env.SH_SEQ_ERPVAR_COLD_STEP1 || "",
+      2: process.env.SH_SEQ_ERPVAR_COLD_STEP2 || "",
+      3: process.env.SH_SEQ_ERPVAR_COLD_STEP3 || "",
+      4: process.env.SH_SEQ_ERPVAR_COLD_STEP4 || "",
+      5: process.env.SH_SEQ_ERPVAR_COLD_STEP5 || "",
+    },
+  },
+  "erp-var-warm": {
+    name: "Trinity One — ERP VAR Warm",
+    senderGroup: "warm-pool",
+    stepIds: {
+      1: process.env.SH_SEQ_ERPVAR_WARM_STEP1 || "",
+      2: process.env.SH_SEQ_ERPVAR_WARM_STEP2 || "",
+      3: process.env.SH_SEQ_ERPVAR_WARM_STEP3 || "",
+    },
+  },
 };
 
 // ── SalesHandy Prospect Field IDs ────────────────────────────
@@ -249,6 +271,7 @@ const FIELD_IDS = {
   painPoints: process.env.SH_FIELD_PAIN_POINTS || "",
   routedProperty: process.env.SH_FIELD_ROUTED_PROPERTY || "",
   personalizedSequence: process.env.SH_FIELD_PERSONALIZED_SEQUENCE || "",
+  erpPlatform: process.env.SH_FIELD_ERP_PLATFORM || "",
 };
 
 // ── Sequence content linter ──────────────────────────────────
@@ -370,14 +393,18 @@ Additional context: ${raw.notes || raw.context || "N/A"}
 Generate output as valid JSON only with exactly these keys:
 1. company_context (3-4 sentences)
 2. pain_points (array of top 3 strings, ranked by likelihood)
-3. recommended_property (one of: "Dream Manager", "Trinity Calibrate", "Trinity Forge", "Consulting")
-4. personalized_steps (array of 4 strings) and each step should be a full email body for a sequence step. Do not include step numbers.
+3. recommended_property (one of: "Dream Manager", "Trinity Calibrate", "Trinity Forge", "Consulting", "Trinity One")
+4. erp_platform (string; if the company's website or industry signals indicate they are an ERP VAR / reseller / SI partner, return the platform they primarily sell — one of: "NetSuite", "Acumatica", "Sage Intacct", "Sage 100", "Sage 300", "Dynamics 365 BC", "Dynamics 365 F&O", "Epicor", "Infor", "SAP B1", "Other". Return empty string if the company is not an ERP VAR.)
+5. personalized_steps (array of 4 strings) and each step should be a full email body for a sequence step. Do not include step numbers.
+
+Routing rule: if erp_platform is non-empty (i.e. they are an ERP VAR), set recommended_property to "Trinity One" — the suite-led sequence applies to that audience. Otherwise route to the brand whose pains best match the prospect.
 
 Example format:
 {
   "company_context": "...",
   "pain_points": ["...", "...", "..."],
-  "recommended_property": "Dream Manager",
+  "recommended_property": "Trinity One",
+  "erp_platform": "NetSuite",
   "personalized_steps": ["...", "...", "...", "..."]
 }`;
 
@@ -436,6 +463,7 @@ Example format:
     company_context: json.company_context || "",
     pain_points: Array.isArray(json.pain_points) ? json.pain_points.slice(0, 3) : [],
     recommended_property: json.recommended_property || "Dream Manager",
+    erp_platform: typeof json.erp_platform === "string" ? json.erp_platform.trim() : "",
     personalized_steps: Array.isArray(json.personalized_steps) ? json.personalized_steps.slice(0, 4) : [],
     claude_quality: claudeQuality,
   };
@@ -467,6 +495,7 @@ function buildProspectFields(prospect) {
       : (prospect.painPoints || prospect.pain_points || ""),
     routedProperty: prospect.routedProperty || prospect.routed_property || "",
     personalizedSequence: prospect.personalizedSequence || prospect.personalized_sequence || "",
+    erpPlatform: prospect.erpPlatform || prospect.erp_platform || "",
   };
 
   for (const [key, value] of Object.entries(map)) {
@@ -675,6 +704,7 @@ exports.handler = async (event) => {
                   SH_Company_Context: claudeResults?.company_context || "",
                   SH_Pain_Points: Array.isArray(claudeResults?.pain_points) ? claudeResults.pain_points.join("; ") : claudeResults?.pain_points || "",
                   SH_Routed_Property: claudeResults?.recommended_property || "",
+                  SH_ERP_Platform: claudeResults?.erp_platform || "",
                   SH_Personalized_Sequence: claudeResults?.personalized_steps ? claudeResults.personalized_steps.join("\n\n") : "",
                 };
 
@@ -702,6 +732,7 @@ exports.handler = async (event) => {
                   painPoints: claudeResults?.pain_points || [],
                   routedProperty: claudeResults?.recommended_property || "",
                   personalizedSequence: claudeResults?.personalized_steps ? claudeResults.personalized_steps.join("\n\n") : "",
+                  erpPlatform: claudeResults?.erp_platform || "",
                 };
 
                 const prospectList = [{ fields: buildProspectFields(enrichedProspect) }];
@@ -754,6 +785,7 @@ exports.handler = async (event) => {
                   deal_value: estimatedDealValue, tags: autoTags,
                   claude_quality: claudeResults?.claude_quality || null,
                   recommended_property: claudeResults?.recommended_property || null,
+                  erp_platform: claudeResults?.erp_platform || null,
                   routed_campaign: routedCampaign,
                   is_inbound: isInbound,
                 },
