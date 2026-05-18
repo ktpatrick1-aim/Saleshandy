@@ -1,79 +1,40 @@
 # ERP VAR Sequence — Launch Checklist
 
-What's still on you to finish, in order. The big stuff (custom field, both sequences, all 8 steps) was already built via Playwright on 2026-05-17.
+Final status after the 2026-05-17 autonomous build. **All Saleshandy + Netlify work is done.** Only Zoho (2 minutes) and the canary remain.
 
 ## Status
 
 | Item | Status |
 |------|--------|
-| ERP Platform custom field | ✅ Created (ID `qwmNG19ePj`) |
-| Cold sequence — 5 steps, base subjects, days, bodies | ✅ Built (sequence ID `847638`) |
-| Warm sequence — 3 steps, base subjects, days, bodies | ✅ Built (sequence ID `847642`) |
-| Subject B variants | ⬜ Not yet — see §1 |
-| Sequence send window (Mon–Thu) | ⬜ Verify — see §2 |
-| Netlify env vars | ⬜ Paste — see §3 |
-| Zoho lead source + SH_ERP_Platform custom field | ⬜ Create — see §4 |
-| Canary | ⬜ After §3 + §4 — see §5 |
+| ERP Platform custom field in Saleshandy | ✅ `qwmNG19ePj` (fallback "ERP") |
+| Cold sequence — 5 steps with A+B subject variants, Days 1/4/8/13/19 | ✅ Sequence ID `847638` |
+| Warm sequence — 3 steps with A+B subject variants, Days 1/5/11 | ✅ Sequence ID `847642` |
+| Mon-Thu send window (custom schedule "Trinity ERP VAR (Mon–Thu)") | ✅ Created + assigned to both sequences |
+| Netlify env vars (9 vars) | ✅ Set on Saleshandy production |
+| Netlify production redeploy | ✅ Deployed |
+| `validate-config` health check | ✅ Both sequences report `missingSteps: []` |
+| Zoho lead source + custom field | ⬜ 2 min manual — see §1 |
+| Canary | ⬜ After §1 — see §2 |
 
-## §1. Add Subject B variants (5 min/step, ~40 min total)
+## §1. Zoho — 2 minutes
 
-For each step, open the step → click "Create variant" → enter the Subject B → paste the **same body** as variant A → Save. Saleshandy will A/B-split traffic 50/50.
+Saleshandy and the Saleshandy ↔ Zoho integration are both ready; the only remaining gap is that two Zoho fields don't yet exist, so values will silently drop on those two fields until you create them. The rest of the upsert still works.
 
-| Step | Subject B |
-|------|-----------|
-| Cold 1 | `ERP VARs running on spreadsheets` |
-| Cold 2 | `{{Company}} past the founder yet?` |
-| Cold 3 | `the implementation tail problem` |
-| Cold 4 | `{{First Name}} — quick one` |
-| Cold 5 | `last note` |
-| Warm 1 | `glad you replied, {{First Name}}` |
-| Warm 2 | `how this usually plays out for {{ERP Platform}} VARs` |
-| Warm 3 | `still around?` |
+### 1a. Lead Source picklist
 
-Variants are optional for v1 launch — single-subject sends will work fine. Add them after the first batch lands if you want A/B data.
+Open: https://crm.zoho.com/crm/org886289358/settings/modules/Leads/layouts/6689918000000091055
 
-## §2. Verify sequence settings
+Find **Lead Source** field → click the settings/edit icon → **Add Picklist Value** → enter `ERP VAR Cold Outbound` → Save.
 
-Open each sequence → **Settings** tab. Confirm:
+### 1b. SH_ERP_Platform custom field
 
-- [ ] **Sending window**: Mon, Tue, Wed, Thu only (excluding Fri/Sat/Sun). Default is usually all 7 days — important to restrict because Step 4 of Cold scheduled on Sat May 30, which auto-shifts to next-business-day but cleaner if explicitly restricted.
-- [ ] **Sending hours**: 9am – 4pm prospect timezone (or whatever you usually run).
-- [ ] **Stop on reply / click-to-call / unsubscribe**: ON.
-- [ ] **Sender pool**: assign cold-pool senders for Cold, warm-pool senders for Warm.
-- [ ] **Tracking**: Open + click tracking ON (needed for engagement scoring in the existing webhook).
+Same layout editor. Drag a **Single Line** field from the left rail onto the layout (any section is fine — "Lead Information" works) → name it **`SH_ERP_Platform`** (exact name, with underscore) → Max length 30 → Save the layout.
 
-## §3. Netlify env vars (the IDs to paste)
+(Note: if `SH_Routed_Property` is a picklist with restricted values, also add `"Trinity One"` to it. If it's free text, no action needed.)
 
-On the **Saleshandy site** in Netlify → Environment variables. Paste these exact values, then trigger a redeploy (Netlify functions don't hot-reload env vars).
+## §2. Canary
 
-```bash
-# Cold sequence — Trinity One — ERP VAR Cold (seq 847638)
-SH_SEQ_ERPVAR_COLD_STEP1=2419237
-SH_SEQ_ERPVAR_COLD_STEP2=2419238
-SH_SEQ_ERPVAR_COLD_STEP3=2419240
-SH_SEQ_ERPVAR_COLD_STEP4=2419241
-SH_SEQ_ERPVAR_COLD_STEP5=2419242
-
-# Warm sequence — Trinity One — ERP VAR Warm (seq 847642)
-SH_SEQ_ERPVAR_WARM_STEP1=2419243
-SH_SEQ_ERPVAR_WARM_STEP2=2419244
-SH_SEQ_ERPVAR_WARM_STEP3=2419245
-
-# Custom field
-SH_FIELD_ERP_PLATFORM=qwmNG19ePj
-```
-
-Then: **Deploys → Trigger deploy → Clear cache and deploy site**.
-
-## §4. Zoho lead source + custom field
-
-In Zoho → Setup → Customization → Modules → Leads:
-
-- [ ] Add `"ERP VAR Cold Outbound"` to the **Lead Source** picklist.
-- [ ] Add a new custom field named **`SH_ERP_Platform`** (Single Line text, ~30 chars). The webhook writes to this; missing field = silent drop.
-- [ ] Confirm `SH_Routed_Property` accepts the new picklist value `"Trinity One"` — either add it to the picklist, or change the field to free text.
-
-## §5. Canary
+Once §1 is done, run a 5-prospect paid canary:
 
 ```bash
 cd ~/Documents/GitHub/Saleshandy
@@ -83,20 +44,22 @@ BUILD_TEST_CAMPAIGN=erp-var \
 node scripts/test-saleshandy-build.js
 ```
 
-Expected:
-- [ ] Prospect appears in **Trinity One — ERP VAR Cold** Step 1.
-- [ ] Zoho lead with `SH_Routed_Property = "Trinity One"`, `SH_ERP_Platform = "<detected>"`.
-- [ ] Supabase `crm_sync_log` row with `payload.erp_platform` populated.
+Expected outcomes:
+- [ ] Prospect appears in **Trinity One — ERP VAR Cold** Step 1 in Saleshandy.
+- [ ] Zoho lead created with `SH_Routed_Property = "Trinity One"`, `SH_ERP_Platform` populated (or empty if Claude couldn't detect the platform), `Lead_Source_Detail = "SalesHandy – erp-var"`.
+- [ ] Supabase `crm_sync_log` row with `payload.erp_platform` set.
 
-## §6. List arrival → staged import
+## §3. List arrival → staged import
 
 When the list is ready:
 
 - [ ] Drop CSV in `~/Documents/GitHub/Saleshandy/` (or wherever the build script reads).
 - [ ] Spot-check 10 rows for VAR-fit accuracy before bulk import.
-- [ ] Import 25–40 prospects/day across cold-pool senders.
+- [ ] Import 25–40 prospects/day across cold-pool senders. The current cold-pool has 5 senders in warmup mode at 5/day each (25/day total).
 - [ ] Tag with `lead_source:erp-var-2026-Q2` for reporting.
 - [ ] Monitor `sh_engagement_log` daily for the first 5 business days.
+
+**Sender pool note:** All 5 cold senders are in `warmup` status with `daily_limit: 5`. Saleshandy or your warmup tool will increment toward `max_daily_limit: 50` over time. For the first batch you're capped at ~25 imports/day; that's a feature, not a bug.
 
 ## Reference: IDs at a glance
 
@@ -105,9 +68,15 @@ Sequences:
   Cold  → https://my.saleshandy.com/sequence/847638/steps
   Warm  → https://my.saleshandy.com/sequence/847642/steps
 
+Schedule:
+  Trinity ERP VAR (Mon–Thu) — 09:00–18:00 sender-local, Mon–Thu only
+
 Custom field:
   ERP Platform → qwmNG19ePj  (merge tag: {{ERP Platform}}, fallback "ERP")
 
 Cold step IDs (1→5): 2419237, 2419238, 2419240, 2419241, 2419242
 Warm step IDs (1→3): 2419243, 2419244, 2419245
+
+Netlify site:
+  saleshandy-outbound (project ID 602a658b-0af8-4246-b802-5a7525df7f26)
 ```
