@@ -68,6 +68,10 @@ const BRANCH_SEQUENCES = {
     stepId: process.env.SH_SEQ_NURTURE_WARM_STEP1 || "",
     tag: "warm-engaged",
   },
+  "erp-var-warm": {
+    stepId: process.env.SH_SEQ_ERPVAR_WARM_STEP1 || "",
+    tag: "warm-engaged-erp-var",
+  },
   "re-engagement": {
     stepId: process.env.SH_SEQ_REENGAGE_STEP1 || "",
     tag: "stale-30d",
@@ -81,6 +85,14 @@ const BRANCH_SEQUENCES = {
     tag: "inbound-referral",
   },
 };
+
+// Pick which warm sequence to branch a prospect into based on the cold
+// sequence they came from. Each cold-family has its own paired warm.
+function pickWarmTarget(coldSequenceName) {
+  const name = (coldSequenceName || "").toLowerCase();
+  if (/erp[- ]?var|trinity one/.test(name)) return "erp-var-warm";
+  return "lead-nurture-warm";
+}
 
 // ── Zoho API helpers (matches codebase pattern) ──────────────
 
@@ -536,10 +548,12 @@ exports.handler = async (event) => {
         const newOpenCount = (existingLead.SH_Emails_Opened || 0) + 1;
         const currentSequence = (sequence.sequenceName || "").toLowerCase();
         const isColdSequence = currentSequence.includes("cold") || currentSequence.includes("nurture");
-        const notAlreadyWarm = !existingLead.SH_Tags?.includes("warm-engaged");
+        const warmTarget = pickWarmTarget(sequence.sequenceName);
+        const alreadyWarmTag = BRANCH_SEQUENCES[warmTarget]?.tag;
+        const notAlreadyWarm = !existingLead.SH_Tags?.includes(alreadyWarmTag);
 
         if (newOpenCount >= 2 && isColdSequence && notAlreadyWarm) {
-          branchResult = await branchProspect(email, "lead-nurture-warm", `opens=${newOpenCount} from cold sequence`);
+          branchResult = await branchProspect(email, warmTarget, `opens=${newOpenCount} from cold sequence`);
         }
       }
 
@@ -560,6 +574,20 @@ exports.handler = async (event) => {
             updateFields.SH_Reply_Confidence = classification.confidence;
             updateFields.SH_Reply_Response_Draft = classification.responseDraft;
             if (classification.category === "unsubscribe") updateFields.SH_Do_Not_Email = true;
+
+            // Interested replies → branch into the matching warm sequence
+            if (classification.category === "interested") {
+              const warmTarget = pickWarmTarget(sequence.sequenceName);
+              const warmTag = BRANCH_SEQUENCES[warmTarget]?.tag;
+              const notAlreadyWarm = !existingLead.SH_Tags?.includes(warmTag);
+              if (notAlreadyWarm) {
+                branchResult = await branchProspect(
+                  email,
+                  warmTarget,
+                  `reply classified as interested (confidence ${classification.confidence})`
+                );
+              }
+            }
 
             await logSync("saleshandy", "inbound", "reply_classification", zohoId || null, email, {
               event: eventType,
